@@ -488,6 +488,7 @@ initialize_load_data(GraphicsManager *self, const GraphicsCommand *g, Image *img
     self->currently_loading = (const LoadData){0};
     self->currently_loading.start_command = *g;
     self->currently_loading.width = g->data_width; self->currently_loading.height = g->data_height;
+    self->currently_loading.reference_rows = g->num_lines; self->currently_loading.reference_columns = g->num_cells;
     switch(data_fmt) {
         case PNG:
             if (g->data_sz > MAX_DATA_SZ) ABRT("EINVAL", "PNG data size too large");
@@ -587,6 +588,8 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
     if (self->currently_loading.loading_completed_successfully) {
         img->width = self->currently_loading.width;
         img->height = self->currently_loading.height;
+        img->rows = self->currently_loading.reference_rows;
+        img->columns = self->currently_loading.reference_columns;
         if (img->root_frame.id) remove_from_cache(self, (const ImageAndFrame){.image_id=img->internal_id, .frame_id=img->root_frame.id});
         img->root_frame = (const Frame){
             .id = ++img->frame_id_counter,
@@ -663,13 +666,103 @@ update_dest_rect(ImageRef *ref, uint32_t num_cols, uint32_t num_rows, CellPixelS
     ref->effective_num_cols = num_cols;
 }
 
+static bool
+fit_to_width_helper(uint32_t img_width, uint32_t img_height,
+                    uint32_t img_columns, uint32_t img_rows,
+                    uint32_t x, uint32_t y, uint32_t *w, uint32_t *h,
+                    uint32_t *src_x, uint32_t *src_y, uint32_t *src_width, uint32_t *src_height,
+                    uint32_t cell_width, uint32_t cell_height,
+                    uint32_t *cell_y_offset, int32_t *start_row) {
+    uint32_t height_delta = 0;
+    // Dimensions of a cell in the original image's units
+    uint32_t src_cell_width = img_width / img_columns;
+    uint32_t src_cell_height = src_cell_width * cell_height / cell_width;
+    *src_x = x * src_cell_width;
+    // We center the image vertically, so the source y coordinate may become negative, in which case
+    // we have to adjust the starting row and the vertical offset
+    int32_t src_y_signed = y * src_cell_height - (src_cell_height * img_rows - img_height) / 2;
+    *src_y = src_y_signed;
+    if (src_y_signed < 0) {
+        *src_y = 0;
+        height_delta = (-src_y_signed) % src_cell_height;
+        *cell_y_offset = -src_y_signed * cell_height / src_cell_height;
+        /* printf("img.height %d cell.height %d src_height %d src_y %d cell_y_offset %d height_delta %d\n", img->height, cell.height, src_cell_height, src_y, ref->cell_y_offset, height_delta); */
+        uint32_t empty_lines = *cell_y_offset / cell_height;
+        *cell_y_offset = *cell_y_offset % cell_height;
+        /* printf("empty_lines %d cell_y_offset %d\n", empty_lines, ref->cell_y_offset); */
+        *start_row += empty_lines;
+        if (*h <= empty_lines)
+            return false;
+        *h -= empty_lines;
+    }
+    *src_width = src_cell_width * *w;
+    *src_height = src_cell_height * *h - height_delta;
+    return true;
+}
+
+
+// Parameters:
+// - `self` - the graphics manager
+// - `row` - the starting row of the screen
+// - `col` - the starting column of the screen
+// - `id` - the id of the image
+// - `x` - the column of the image we want to start with
+// - `y` - the row of the image we want to start with
+// - `w` - the number of image columns we want to display
+// - `h` - the number of image rows we want to display
+// - `cell` - the size of a screen cell
+// Note: the image is resized to fit a box of cells with dimensions `img->columns` by `img->rows`,
+// and parameters `x`, `y, `w`, `h` describe a part of this box that we want to display. Note also
+// that the exact pixel dimensions of this box depends on the cell dimensions, so we recompute
+// how exactly we need to stretch the image inside the box each time (because cell dimensions might
+// change). We might want to cache the result of this computation in the future.
+Image*
+grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t id, uint32_t x, uint32_t y, uint32_t w, uint32_t h, CellPixelSize cell) {
+    Image* img = img_by_client_id(self, id);
+    if (img == NULL) return NULL;
+    ensure_space_for(img, refs, ImageRef, img->refcnt + 1, refcap, 16, true);
+    self->layers_dirty = true;
+    ImageRef *ref = img->refs + img->refcnt++;
+    zero_at_ptr(ref);
+    img->atime = monotonic();
+    uint32_t img_rows = img->rows;
+    uint32_t img_columns = img->columns;
+    // If the number of columns or rows for the image is not set, compute them in such a way that
+    // the image is as close as possible to its natural size.
+    if (img_columns == 0)
+        img_columns = (img->width + cell.width - 1) / cell.width;
+    if (img_rows == 0)
+        img_rows = (img->height + cell.height - 1) / cell.height;
+    // Fit the image to the box while preserving aspect ration
+    if (img->width * img->rows * cell.height > img->height * img->columns * cell.width) {
+        // Fit to width and center vertically
+        if (!fit_to_width_helper(img->width, img->height, img_columns, img_rows, x, y, &w, &h, &ref->src_x, &ref->src_y, &ref->src_width, &ref->src_height, cell.width, cell.height, &ref->cell_y_offset, &ref->start_row))
+            return NULL;
+    } else {
+        // Fit to height and center horizontally
+        // We use the same function but with width and height swapped
+        if (!fit_to_width_helper(img->height, img->width, img_rows, img_columns, y, x, &h, &w, &ref->src_y, &ref->src_x, &ref->src_height, &ref->src_width, cell.height, cell.width, &ref->cell_x_offset, &ref->start_column))
+            return NULL;
+    }
+    /* printf("src_y %d src_height_pre %d = %d*%d - %d\n", ref->src_y, ref->src_height, src_cell_height, h, height_delta); */
+    /* ref->src_width = MIN(ref->src_width, img->width - (img->width > ref->src_x ? ref->src_x : img->width)); */
+    /* ref->src_height = MIN(ref->src_height, img->height - (img->height > ref->src_y ? ref->src_y : img->height)); */
+    /* printf("src_y %d src_height %d\n", ref->src_y, ref->src_height); */
+    ref->z_index = 0;
+    ref->start_row = row; ref->start_column = col;
+    ref->num_cols = w; ref->num_rows = h;
+    ref->is_char = true;
+    update_src_rect(ref, img);
+    update_dest_rect(ref, w, h, cell);
+    return img;
+}
 
 static uint32_t
 handle_put_command(GraphicsManager *self, const GraphicsCommand *g, Cursor *c, bool *is_dirty, Image *img, CellPixelSize cell) {
     if (img == NULL) {
         if (g->id) img = img_by_client_id(self, g->id);
         else if (g->image_number) img = img_by_client_number(self, g->image_number);
-        if (img == NULL) { set_command_failed_response("ENOENT", "Put command refers to non-existent image with id: %u and number: %u", g->id, g->image_number); return g->id; }
+        if (img == NULL) { set_command_failed_response("ENOENT", "Put command refers to non-existent image with id: %u and number: %u out of %u images", g->id, g->image_number, self->image_count); return g->id; }
     }
     if (!img->root_frame_data_loaded) { set_command_failed_response("ENOENT", "Put command refers to image with id: %u that could not load its data", g->id); return img->client_id; }
     ensure_space_for(img, refs, ImageRef, img->refcnt + 1, refcap, 16, true);
@@ -742,6 +835,7 @@ grman_update_layers(GraphicsManager *self, unsigned int scrolled_by, float scree
     float screen_width_px = num_cols * cell.width;
     float screen_height_px = num_rows * cell.height;
     float y0 = screen_top - dy * scrolled_by;
+    printf("scrolled by %u  screen top %f  screen bot %f  y0 %f\n", scrolled_by, screen_top, screen_bottom, y0);
 
     // Iterate over all visible refs and create render data
     self->count = 0;
@@ -1283,17 +1377,21 @@ scan_active_animations(GraphicsManager *self, const monotonic_t now, monotonic_t
 static inline void
 filter_refs(GraphicsManager *self, const void* data, bool free_images, bool (*filter_func)(const ImageRef*, Image*, const void*, CellPixelSize), CellPixelSize cell, bool only_first_image) {
     bool matched = false;
+    unsigned count = 0;
+    unsigned total = 0;
     for (size_t i = self->image_count; i-- > 0;) {
         Image *img = self->images + i;
         for (size_t j = img->refcnt; j-- > 0;) {
             ImageRef *ref = img->refs + j;
+            total += 1;
             if (filter_func(ref, img, data, cell)) {
                 remove_i_from_array(img->refs, j, img->refcnt);
                 self->layers_dirty = true;
                 matched = true;
+                count += 1;
             }
         }
-        if (img->refcnt == 0 && (free_images || img->client_id == 0)) remove_image(self, i);
+        if (img->refcnt == 0 && (free_images || img->client_id == 0)) { remove_image(self, i);  printf("Image removed in filter_refs\n"); }
         if (only_first_image && matched) break;
     }
 }
@@ -1306,7 +1404,7 @@ modify_refs(GraphicsManager *self, const void* data, bool free_images, bool (*fi
         for (size_t j = img->refcnt; j-- > 0;) {
             if (filter_func(img->refs + j, img, data, cell)) remove_i_from_array(img->refs, j, img->refcnt);
         }
-        if (img->refcnt == 0 && (free_images || img->client_id == 0)) remove_image(self, i);
+        if (img->refcnt == 0 && (free_images || img->client_id == 0)) { remove_image(self, i); printf("Image removed in modify_refs\n"); }
     }
 }
 
@@ -1363,7 +1461,7 @@ void
 grman_scroll_images(GraphicsManager *self, const ScrollData *data, CellPixelSize cell) {
     if (self->image_count) {
         self->layers_dirty = true;
-        modify_refs(self, data, true, data->has_margins ? scroll_filter_margins_func : scroll_filter_func, cell);
+        modify_refs(self, data, false, data->has_margins ? scroll_filter_margins_func : scroll_filter_func, cell);
     }
 }
 
@@ -1469,6 +1567,18 @@ handle_delete_command(GraphicsManager *self, const GraphicsCommand *g, Cursor *c
 }
 
 // }}}
+
+static inline bool
+char_filter_func(const ImageRef *ref, Image UNUSED *img, const void *data, CellPixelSize cell UNUSED) {
+    int32_t row = *(int32_t*)data;
+    return ref->is_char && ref->start_row == row;
+}
+
+void
+grman_remove_char_images(GraphicsManager *self, int32_t row) {
+    CellPixelSize dummy = {0};
+    filter_refs(self, &row, false, char_filter_func, dummy, false);
+}
 
 void
 grman_resize(GraphicsManager *self, index_type UNUSED old_lines, index_type UNUSED lines, index_type UNUSED old_columns, index_type UNUSED columns) {

@@ -1285,6 +1285,7 @@ screen_cursor_to_line(Screen *self, unsigned int line) {
 
 void
 screen_erase_in_line(Screen *self, unsigned int how, bool private) {
+    printf("erase_in_line cur %d how %d\n", self->cursor->y, how);
     /*Erases a line in a specific way.
 
         :param int how: defines the way the line should be erased in:
@@ -1327,6 +1328,7 @@ screen_erase_in_line(Screen *self, unsigned int how, bool private) {
 
 void
 screen_erase_in_display(Screen *self, unsigned int how, bool private) {
+    printf("erase_in_display cur %d how %d\n", self->cursor->y, how);
     /* Erases display in a specific way.
 
         :param int how: defines the way the screen should be erased:
@@ -1406,6 +1408,7 @@ screen_delete_lines(Screen *self, unsigned int count) {
     unsigned int top = self->margin_top, bottom = self->margin_bottom;
     if (count == 0) count = 1;
     if (top <= self->cursor->y && self->cursor->y <= bottom) {
+        printf("screen_delete_lines cur %d count %d\n", self->cursor->y, count);
         linebuf_delete_lines(self->linebuf, count, self->cursor->y, bottom);
         self->is_dirty = true;
         clear_selection(&self->selections);
@@ -1774,6 +1777,32 @@ screen_has_marker(Screen *self) {
     return self->marker != NULL;
 }
 
+static void
+screen_render_line_graphics(Screen *self, Line *line, index_type lnum) {
+    int count = 0;
+    index_type i;
+    grman_remove_char_images(self->grman, lnum);
+    for (i = 0; i < line->xnum; i++) {
+        CPUCell *cpu_cell = line->cpu_cells + i;
+        GPUCell *gpu_cell = line->gpu_cells + i;
+        if (cpu_cell->ch == '@') {
+            if ((gpu_cell->fg & 0xff) == 2) {
+                count++;
+                color_type fg_color = gpu_cell->fg;
+                uint32_t r = (fg_color >> 24) & 0xff;
+                uint32_t g  = (fg_color >> 16) & 0xff;
+                uint32_t b  = (fg_color >> 8) & 0xff;
+                uint32_t id = r;
+                grman_put_char_image(self->grman, lnum, i, id, g, b, 1, 1, self->cell_size);
+            } else {
+                uint32_t id = gpu_cell->fg >> 8;
+                grman_put_char_image(self->grman, lnum, i, id, 0, 0, 0, 0, self->cell_size);
+            }
+        }
+    }
+    if (count > 0)
+        printf("rendered %d image cells lnum=%u\n", count, lnum);
+}
 
 void
 screen_update_cell_data(Screen *self, void *address, FONTS_DATA_HANDLE fonts_data, bool cursor_has_moved) {
@@ -1786,6 +1815,7 @@ screen_update_cell_data(Screen *self, void *address, FONTS_DATA_HANDLE fonts_dat
     for (index_type y = 0; y < MIN(self->lines, self->scrolled_by); y++) {
         lnum = self->scrolled_by - 1 - y;
         historybuf_init_line(self->historybuf, lnum, self->historybuf->line);
+        screen_render_line_graphics(self, self->historybuf->line, y - self->scrolled_by);
         if (self->historybuf->line->has_dirty_text) {
             render_line(fonts_data, self->historybuf->line, lnum, self->cursor, self->disable_ligatures);
             if (screen_has_marker(self)) mark_text_in_line(self->marker, self->historybuf->line);
@@ -1796,6 +1826,7 @@ screen_update_cell_data(Screen *self, void *address, FONTS_DATA_HANDLE fonts_dat
     for (index_type y = self->scrolled_by; y < self->lines; y++) {
         lnum = y - self->scrolled_by;
         linebuf_init_line(self->linebuf, lnum);
+        screen_render_line_graphics(self, self->linebuf->line, lnum);
         if (self->linebuf->line->has_dirty_text ||
             (cursor_has_moved && (self->cursor->y == lnum || self->last_rendered.cursor_y == lnum))) {
             render_line(fonts_data, self->linebuf->line, lnum, self->cursor, self->disable_ligatures);

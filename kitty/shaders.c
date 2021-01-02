@@ -341,7 +341,7 @@ cell_prepare_to_render(ssize_t vao_idx, ssize_t gvao_idx, Screen *screen, GLfloa
         changed = true;
     }
 
-    if (gvao_idx && grman_update_layers(screen->grman, screen->scrolled_by, xstart, ystart, dx, dy, screen->columns, screen->lines, screen->cell_size)) {
+    if (gvao_idx && (grman_update_layers(screen->grman, screen->scrolled_by, xstart, ystart, dx, dy, screen->columns, screen->lines, screen->cell_size) || true)) {
         send_graphics_data_to_gpu(screen->grman->count, gvao_idx, screen->grman->render_data);
         changed = true;
     }
