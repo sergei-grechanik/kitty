@@ -718,6 +718,7 @@ fit_to_width_helper(uint32_t img_width, uint32_t img_height,
 // change). We might want to cache the result of this computation in the future.
 Image*
 grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t id, uint32_t x, uint32_t y, uint32_t w, uint32_t h, CellPixelSize cell) {
+    printf("put_char_image row %d col %d id %d x %d y %d w %d h %d\n", row, col, id, x, y, w, h);
     Image* img = img_by_client_id(self, id);
     if (img == NULL) return NULL;
     ensure_space_for(img, refs, ImageRef, img->refcnt + 1, refcap, 16, true);

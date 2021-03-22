@@ -1777,31 +1777,44 @@ screen_has_marker(Screen *self) {
     return self->marker != NULL;
 }
 
+// TODO: Move this to render_line
 static void
 screen_render_line_graphics(Screen *self, Line *line, index_type lnum) {
-    int count = 0;
     index_type i;
     grman_remove_char_images(self->grman, lnum);
+    uint32_t prev_id = -1;
+    uint32_t prev_img_row = -1;
+    uint32_t strike = 0;
     for (i = 0; i < line->xnum; i++) {
         CPUCell *cpu_cell = line->cpu_cells + i;
         GPUCell *gpu_cell = line->gpu_cells + i;
-        if (cpu_cell->ch == '@') {
+        uint32_t id = -1;
+        uint32_t img_row = 0;
+        if (cpu_cell->ch >= global_state.opts.image_chars_first &&
+            cpu_cell->ch <= global_state.opts.image_chars_last) {
+            id = cpu_cell->ch - global_state.opts.image_chars_first;
             if ((gpu_cell->fg & 0xff) == 2) {
-                count++;
                 color_type fg_color = gpu_cell->fg;
-                uint32_t r = (fg_color >> 24) & 0xff;
-                uint32_t g  = (fg_color >> 16) & 0xff;
-                uint32_t b  = (fg_color >> 8) & 0xff;
-                uint32_t id = r;
-                grman_put_char_image(self->grman, lnum, i, id, g, b, 1, 1, self->cell_size);
+                /* uint32_t r = (fg_color >> 24) & 0xff; */
+                /* uint32_t g = (fg_color >> 16) & 0xff; */
+                uint32_t b = (fg_color >> 8) & 0xff;
+                img_row = b;
             } else {
-                uint32_t id = gpu_cell->fg >> 8;
-                grman_put_char_image(self->grman, lnum, i, id, 0, 0, 0, 0, self->cell_size);
+                img_row = gpu_cell->fg >> 8;
             }
         }
+        if (id == prev_id && img_row == prev_img_row) {
+            strike++;
+        } else {
+            if (prev_id != (uint32_t)-1)
+                grman_put_char_image(self->grman, lnum, i - strike, prev_id, 0, prev_img_row, strike, 1, self->cell_size);
+            prev_id = id;
+            prev_img_row = img_row;
+            strike = 1;
+        }
     }
-    if (count > 0)
-        printf("rendered %d image cells lnum=%u\n", count, lnum);
+    if (prev_id != (uint32_t)-1)
+        grman_put_char_image(self->grman, lnum, i - strike, prev_id, 0, prev_img_row, strike, 1, self->cell_size);
 }
 
 void
