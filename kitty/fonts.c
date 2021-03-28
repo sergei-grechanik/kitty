@@ -513,7 +513,7 @@ START_ALLOW_CASE_RANGE
             // Don't display characters reserved for images.
             if (cpu_cell->ch >= global_state.opts.image_chars_first &&
                 cpu_cell->ch <= global_state.opts.image_chars_last)
-                return NO_FONT;
+                return BLANK_FONT;
             ans = in_symbol_maps(fg, cpu_cell->ch);
             if (ans > -1) return ans;
             switch(BI_VAL(gpu_cell->attrs)) {
