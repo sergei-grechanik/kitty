@@ -680,7 +680,9 @@ fit_to_width_helper(uint32_t img_width, uint32_t img_height,
     *src_x = x * src_cell_width;
     // We center the image vertically, so the source y coordinate may become negative, in which case
     // we have to adjust the starting row and the vertical offset
-    int32_t src_y_signed = y * src_cell_height - (src_cell_height * img_rows - img_height) / 2;
+    int32_t src_y_signed = y * src_cell_height - (int32_t)(src_cell_height * img_rows - img_height) / 2;
+    printf("y %d src_cell_height %d img_rows %d img_height %d src_y_signed %d\n",
+           y, src_cell_height, img_rows, img_height, src_y_signed);
     *src_y = src_y_signed;
     if (src_y_signed < 0) {
         *src_y = 0;
@@ -689,7 +691,7 @@ fit_to_width_helper(uint32_t img_width, uint32_t img_height,
         /* printf("img.height %d cell.height %d src_height %d src_y %d cell_y_offset %d height_delta %d\n", img->height, cell.height, src_cell_height, src_y, ref->cell_y_offset, height_delta); */
         uint32_t empty_lines = *cell_y_offset / cell_height;
         *cell_y_offset = *cell_y_offset % cell_height;
-        /* printf("empty_lines %d cell_y_offset %d\n", empty_lines, ref->cell_y_offset); */
+        printf("empty_lines %d cell_y_offset %d\n", empty_lines, *cell_y_offset);
         *start_row += empty_lines;
         if (*h <= empty_lines)
             return false;
@@ -734,12 +736,17 @@ grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t
         img_columns = (img->width + cell.width - 1) / cell.width;
     if (img_rows == 0)
         img_rows = (img->height + cell.height - 1) / cell.height;
-    // Fit the image to the box while preserving aspect ration
+
+    ref->start_row = row; ref->start_column = col;
+
+    // Fit the image to the box while preserving aspect ratio
     if (img->width * img->rows * cell.height > img->height * img->columns * cell.width) {
+        printf("Fit to width and center vertically\n");
         // Fit to width and center vertically
         if (!fit_to_width_helper(img->width, img->height, img_columns, img_rows, x, y, &w, &h, &ref->src_x, &ref->src_y, &ref->src_width, &ref->src_height, cell.width, cell.height, &ref->cell_y_offset, &ref->start_row))
             return NULL;
     } else {
+        printf("Fit to height and center horizontally\n");
         // Fit to height and center horizontally
         // We use the same function but with width and height swapped
         if (!fit_to_width_helper(img->height, img->width, img_rows, img_columns, y, x, &h, &w, &ref->src_y, &ref->src_x, &ref->src_height, &ref->src_width, cell.height, cell.width, &ref->cell_x_offset, &ref->start_column))
@@ -750,9 +757,10 @@ grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t
     /* ref->src_height = MIN(ref->src_height, img->height - (img->height > ref->src_y ? ref->src_y : img->height)); */
     /* printf("src_y %d src_height %d\n", ref->src_y, ref->src_height); */
     ref->z_index = 0;
-    ref->start_row = row; ref->start_column = col;
     ref->num_cols = w; ref->num_rows = h;
     ref->is_char = true;
+    printf("ref: start_row %d start_column %d num_cols %d num_rows %d src_x %d src_y %d src_width %d src_height %d cell_x_offset %d cell_y_offset %d\n",
+           ref->start_row, ref->start_column, ref->num_cols, ref->num_rows, ref->src_x, ref->src_y, ref->src_width, ref->src_height, ref->cell_x_offset, ref->cell_y_offset);
     update_src_rect(ref, img);
     update_dest_rect(ref, w, h, cell);
     return img;
