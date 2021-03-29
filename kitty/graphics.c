@@ -675,7 +675,9 @@ fit_to_width_helper(uint32_t img_width, uint32_t img_height,
                     uint32_t *cell_y_offset, int32_t *start_row) {
     uint32_t height_delta = 0;
     // Dimensions of a cell in the original image's units
-    uint32_t src_cell_width = img_width / img_columns;
+    // We use ceiling division here because otherwise the image may overfit the box. The side
+    // effect is that it now may underfit the box, but it's probably better.
+    uint32_t src_cell_width = (img_width + img_columns - 1) / img_columns;
     uint32_t src_cell_height = src_cell_width * cell_height / cell_width;
     *src_x = x * src_cell_width;
     // We center the image vertically, so the source y coordinate may become negative, in which case
@@ -739,23 +741,34 @@ grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t
 
     ref->start_row = row; ref->start_column = col;
 
+    // We use integers for coordinate computation which leads to problems with low-resolution images
+    // scaled to large boxes. They either overfit or underfit the box (currently we underfit).
+    // By increasing the scale we can fit the box better but at the cost of scaling artifacts.
+    uint32_t scale = 1;
+
     // Fit the image to the box while preserving aspect ratio
     if (img->width * img->rows * cell.height > img->height * img->columns * cell.width) {
         printf("Fit to width and center vertically\n");
         // Fit to width and center vertically
-        if (!fit_to_width_helper(img->width, img->height, img_columns, img_rows, x, y, &w, &h, &ref->src_x, &ref->src_y, &ref->src_width, &ref->src_height, cell.width, cell.height, &ref->cell_y_offset, &ref->start_row))
+        if (!fit_to_width_helper(img->width*scale, img->height*scale, img_columns, img_rows, x, y, &w, &h, &ref->src_x, &ref->src_y, &ref->src_width, &ref->src_height, cell.width, cell.height, &ref->cell_y_offset, &ref->start_row))
             return NULL;
     } else {
         printf("Fit to height and center horizontally\n");
         // Fit to height and center horizontally
         // We use the same function but with width and height swapped
-        if (!fit_to_width_helper(img->height, img->width, img_rows, img_columns, y, x, &h, &w, &ref->src_y, &ref->src_x, &ref->src_height, &ref->src_width, cell.height, cell.width, &ref->cell_x_offset, &ref->start_column))
+        if (!fit_to_width_helper(img->height*scale, img->width*scale, img_rows, img_columns, y, x, &h, &w, &ref->src_y, &ref->src_x, &ref->src_height, &ref->src_width, cell.height, cell.width, &ref->cell_x_offset, &ref->start_column))
             return NULL;
     }
     /* printf("src_y %d src_height_pre %d = %d*%d - %d\n", ref->src_y, ref->src_height, src_cell_height, h, height_delta); */
     /* ref->src_width = MIN(ref->src_width, img->width - (img->width > ref->src_x ? ref->src_x : img->width)); */
     /* ref->src_height = MIN(ref->src_height, img->height - (img->height > ref->src_y ? ref->src_y : img->height)); */
     /* printf("src_y %d src_height %d\n", ref->src_y, ref->src_height); */
+    ref->src_height /= scale;
+    ref->src_width /= scale;
+    ref->src_x /= scale;
+    ref->src_y /= scale;
+    ref->cell_x_offset /= scale;
+    ref->cell_y_offset /= scale;
     ref->z_index = 0;
     ref->num_cols = w; ref->num_rows = h;
     ref->is_char = true;
