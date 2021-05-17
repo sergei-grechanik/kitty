@@ -382,6 +382,104 @@ get_free_client_id(const GraphicsManager *self) {
     return ans;
 }
 
+// Removes the oldest unreferenced image from the char image range and returns the freed client_id.
+// If all images from the range have references then zero is returned.
+static inline uint32_t
+remove_oldest_char_image(GraphicsManager *self) {
+    uint32_t range_first = global_state.opts.image_chars_first;
+    uint32_t range_last = global_state.opts.image_chars_last;
+    uint32_t oldest_i = -1;
+    uint32_t oldest_id = 0;
+    monotonic_t oldest_atime = MONOTONIC_T_MAX;
+    for (size_t i = 0; i < self->image_count; i++) {
+        Image *q = self->images + i;
+        if (q->client_id >= range_first && q->client_id <= range_last &&
+            q->refcnt == 0 && q->atime < oldest_atime) {
+            oldest_i = i;
+            oldest_id = q->client_id;
+            oldest_atime = q->atime;
+        }
+    }
+    if (oldest_id != 0) {
+        remove_image(self, oldest_i);
+    }
+    return oldest_id;
+}
+
+// Gets a free client id that is suitable for char images. The are several differences from
+// get_free_client_id:
+// - The resulting id is taken from the supported unicode symbol range (the client id coincides with
+//   the 32-bit value of the unicode symbol used to place the image).
+// - The id is randomized to minimize the probability of clash between different apps and ssh
+//   sessions.
+// - If there is no suitable client id then the oldest char_image without references is removed.
+// If the range of suitable unicode symbols is empty or no image can be deallocated, zero value is
+// returned. Zero is never considered to be a correct client_id.
+static inline uint32_t get_free_char_image_client_id(GraphicsManager *self) {
+    if (global_state.opts.image_chars_first > global_state.opts.image_chars_last)
+        return 0;
+    uint32_t range_first = global_state.opts.image_chars_first;
+    uint32_t range_last = global_state.opts.image_chars_last;
+    uint32_t range_size = range_last - range_first + 1;
+    uint32_t candidate_id = rand() % range_size;
+    if (!self->image_count) return candidate_id;
+    // Gather all client ids that fall into the reserved range.
+    uint32_t *client_ids = malloc(sizeof(uint32_t) * self->image_count);
+    size_t count = 0;
+    for (size_t i = 0; i < self->image_count; i++) {
+        Image *q = self->images + i;
+        if (q->client_id >= range_first && q->client_id <= range_last)
+            client_ids[count++] = q->client_id;
+    }
+    if (!count) {
+        free(client_ids);
+        return candidate_id;
+    }
+    if (count == range_size) {
+        free(client_ids);
+        // Delete the oldest unreferenced image and use its id.
+        return remove_oldest_char_image(self);
+    }
+    assert(count > 0 && count < range_size);
+    // Sort ids by the distance to the candidate_id
+    // (which is defined as (x - candidate_id) % range_size for the euclidean
+    // definition of %)
+#define dist_to_candidate(x)                    \
+    (((x) >= candidate_id) ? ((x)-candidate_id) \
+                           : ((x)-candidate_id + range_size))
+#define int_lt(a, b) (dist_to_candidate(*a) < dist_to_candidate(*b))
+    QSORT(uint32_t, client_ids, count, int_lt)
+#undef int_lt
+    // Now find the first gap. `prev_candidate_dist` is the distance between
+    // `candidate_id` and the current potential gap.
+    uint32_t prev_candidate_dist = 0;
+    for (size_t i = 0; i < count; i++) {
+        uint32_t cur_id = client_ids[i];
+        uint32_t cur_dist = dist_to_candidate(cur_id);
+        assert(cur_dist >= prev_candidate_dist);
+        if (cur_dist > prev_candidate_dist) break;
+        prev_candidate_dist = cur_dist + 1;
+    }
+    assert(prev_candidate_dist < range_size);
+    // Convert the distance to the element in the found gap to an id.
+    uint32_t result_id =
+        (prev_candidate_dist <= range_last - candidate_id)
+            ? candidate_id + prev_candidate_dist
+            : prev_candidate_dist - (range_last - candidate_id) + range_first;
+    // Check that we've converted it correctly and the resulting id is indeed
+    // unused.
+    assert(dist_to_candidate(result_id) == prev_candidate_dist);
+    assert(result_id >= range_first && result_id <= range_last);
+#ifndef NDEBUG
+    for (size_t i = 0; i < count; i++) {
+        assert(result_id != client_ids[i]);
+    }
+#endif
+    free(client_ids);
+    return result_id;
+#undef dist_to_candidate
+}
+
 #define ABRT(code, ...) { set_command_failed_response(code, __VA_ARGS__); self->currently_loading.loading_completed_successfully = false; free_load_data(&self->currently_loading); return NULL; }
 
 #define MAX_DATA_SZ (4u * 100000000u)
@@ -562,7 +660,12 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
             img->internal_id = internal_id_counter++;
             img->client_id = iid;
             img->client_number = g->image_number;
-            if (!img->client_id && img->client_number) {
+            if (!img->client_id && self->currently_loading.reference_rows) {
+                // We assume that if reference_rows are specified then we want to allocate a client
+                // id in the char_image range.
+                img->client_id = get_free_char_image_client_id(self);
+                iid = img->client_id;
+            } else if (!img->client_id && img->client_number) {
                 img->client_id = get_free_client_id(self);
                 iid = img->client_id;
             }
@@ -717,7 +820,7 @@ fit_to_width_helper(uint32_t img_width, uint32_t img_height,
 // - `cell` - the size of a screen cell
 // Note: the image is resized to fit a box of cells with dimensions `img->columns` by `img->rows`,
 // and parameters `x`, `y, `w`, `h` describe a part of this box that we want to display. Note also
-// that the exact pixel dimensions of this box depends on the cell dimensions, so we recompute
+// that the exact pixel dimensions of this box depend on the cell dimensions, so we recompute
 // how exactly we need to stretch the image inside the box each time (because cell dimensions might
 // change). We might want to cache the result of this computation in the future.
 Image*

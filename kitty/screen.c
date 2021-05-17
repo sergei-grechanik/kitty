@@ -1778,11 +1778,14 @@ screen_has_marker(Screen *self) {
 }
 
 // TODO: Move this to render_line
+// Scan the line and create images (image instances) in place of unicode symbols reserved for image
+// placement.
 static void
 screen_render_line_graphics(Screen *self, Line *line, index_type lnum) {
     index_type i;
     grman_remove_char_images(self->grman, lnum);
-    uint32_t prev_id = -1;
+    // 0 client id is considered to be incorrect (doesn't denote any image).
+    uint32_t prev_id = 0;
     uint32_t prev_img_row = -1;
     uint32_t strike = 0;
     for (i = 0; i < line->xnum; i++) {
@@ -1792,7 +1795,10 @@ screen_render_line_graphics(Screen *self, Line *line, index_type lnum) {
         uint32_t img_row = 0;
         if (cpu_cell->ch >= global_state.opts.image_chars_first &&
             cpu_cell->ch <= global_state.opts.image_chars_last) {
-            id = cpu_cell->ch - global_state.opts.image_chars_first;
+            // The client_id coincides with the value of the character.
+            id = cpu_cell->ch;
+            // In 256 colors mode the foreground color indicates the row number. In 24-bit color
+            // mode we use the blue component for that.
             if ((gpu_cell->fg & 0xff) == 2) {
                 color_type fg_color = gpu_cell->fg;
                 /* uint32_t r = (fg_color >> 24) & 0xff; */
@@ -1806,14 +1812,14 @@ screen_render_line_graphics(Screen *self, Line *line, index_type lnum) {
         if (id == prev_id && img_row == prev_img_row) {
             strike++;
         } else {
-            if (prev_id != (uint32_t)-1)
+            if (prev_id)
                 grman_put_char_image(self->grman, lnum, i - strike, prev_id, 0, prev_img_row, strike, 1, self->cell_size);
             prev_id = id;
             prev_img_row = img_row;
             strike = 1;
         }
     }
-    if (prev_id != (uint32_t)-1)
+    if (prev_id)
         grman_put_char_image(self->grman, lnum, i - strike, prev_id, 0, prev_img_row, strike, 1, self->cell_size);
 }
 

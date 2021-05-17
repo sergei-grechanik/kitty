@@ -531,7 +531,7 @@ def handle_symbol_map(key: str, val: str, ans: Dict[str, Any]) -> None:
 def handle_image_chars(key: str, val: str, ans: Dict[str, Any]) -> None:
     bounds = parse_symbol_range(val)
     if bounds:
-        ans['image_chars_first'] = bounds[0]
+        ans['image_chars_first'] = max(bounds[0], 1)
         ans['image_chars_last'] = bounds[1]
 
 
