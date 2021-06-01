@@ -1285,7 +1285,6 @@ screen_cursor_to_line(Screen *self, unsigned int line) {
 
 void
 screen_erase_in_line(Screen *self, unsigned int how, bool private) {
-    printf("erase_in_line cur %d how %d\n", self->cursor->y, how);
     /*Erases a line in a specific way.
 
         :param int how: defines the way the line should be erased in:
@@ -1791,7 +1790,7 @@ screen_render_line_graphics(Screen *self, Line *line, index_type lnum) {
     for (i = 0; i < line->xnum; i++) {
         CPUCell *cpu_cell = line->cpu_cells + i;
         GPUCell *gpu_cell = line->gpu_cells + i;
-        uint32_t id = -1;
+        uint32_t id = 0;
         uint32_t img_row = 0;
         if (cpu_cell->ch >= global_state.opts.image_chars_first &&
             cpu_cell->ch <= global_state.opts.image_chars_last) {

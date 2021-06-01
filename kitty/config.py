@@ -533,6 +533,10 @@ def handle_image_chars(key: str, val: str, ans: Dict[str, Any]) -> None:
     if bounds:
         ans['image_chars_first'] = max(bounds[0], 1)
         ans['image_chars_last'] = bounds[1]
+    else:
+        log_error("Disabling char images because the symbol range is invalid")
+        ans['image_chars_first'] = 0
+        ans['image_chars_last'] = 0
 
 
 @special_handler

@@ -90,6 +90,7 @@ free_load_data(LoadData *ld) {
 
 static inline void
 free_image(GraphicsManager *self, Image *img) {
+    printf("FREEING IMAGE %d\n", img->client_id);
     if (img->texture_id) free_texture(&img->texture_id);
     ImageAndFrame key = { .image_id=img->internal_id, .frame_id = img->root_frame.id };
     if (!remove_from_cache(self, key) && PyErr_Occurred()) PyErr_Print();
@@ -382,27 +383,34 @@ get_free_client_id(const GraphicsManager *self) {
     return ans;
 }
 
-// Removes the oldest unreferenced image from the char image range and returns the freed client_id.
-// If all images from the range have references then zero is returned.
+// Removes the oldest image from the char image range and returns the freed
+// client_id. If possible, an image with zero reference count is preferred.
 static inline uint32_t
 remove_oldest_char_image(GraphicsManager *self) {
     uint32_t range_first = global_state.opts.image_chars_first;
     uint32_t range_last = global_state.opts.image_chars_last;
     uint32_t oldest_i = -1;
     uint32_t oldest_id = 0;
+    bool oldest_is_referenced = false;
     monotonic_t oldest_atime = MONOTONIC_T_MAX;
     for (size_t i = 0; i < self->image_count; i++) {
         Image *q = self->images + i;
-        if (q->client_id >= range_first && q->client_id <= range_last &&
-            q->refcnt == 0 && q->atime < oldest_atime) {
-            oldest_i = i;
-            oldest_id = q->client_id;
-            oldest_atime = q->atime;
-        }
+        printf("client_id %d refcnt %ld\n", q->client_id, q->refcnt);
+        if (q->client_id < range_first || q->client_id > range_last)
+            continue;
+        if (!oldest_is_referenced && q->refcnt > 0)
+            continue;
+        if (q->atime >= oldest_atime)
+            continue;
+        oldest_i = i;
+        oldest_id = q->client_id;
+        oldest_is_referenced = (q->refcnt > 0);
+        oldest_atime = q->atime;
     }
     if (oldest_id != 0) {
         remove_image(self, oldest_i);
     }
+    printf("LALALALALA oldest_id %d\n", oldest_id);
     return oldest_id;
 }
 
@@ -420,8 +428,10 @@ static inline uint32_t get_free_char_image_client_id(GraphicsManager *self) {
         return 0;
     uint32_t range_first = global_state.opts.image_chars_first;
     uint32_t range_last = global_state.opts.image_chars_last;
+    printf("\n\n\n");
+    printf("range_first: %d, range_last: %d\n", range_first, range_last);
     uint32_t range_size = range_last - range_first + 1;
-    uint32_t candidate_id = rand() % range_size;
+    uint32_t candidate_id = range_first + rand() % range_size;
     if (!self->image_count) return candidate_id;
     // Gather all client ids that fall into the reserved range.
     uint32_t *client_ids = malloc(sizeof(uint32_t) * self->image_count);
@@ -440,6 +450,7 @@ static inline uint32_t get_free_char_image_client_id(GraphicsManager *self) {
         // Delete the oldest unreferenced image and use its id.
         return remove_oldest_char_image(self);
     }
+    printf("count: %ld range_size: %d\n", count, range_size);
     assert(count > 0 && count < range_size);
     // Sort ids by the distance to the candidate_id
     // (which is defined as (x - candidate_id) % range_size for the euclidean
@@ -450,25 +461,38 @@ static inline uint32_t get_free_char_image_client_id(GraphicsManager *self) {
 #define int_lt(a, b) (dist_to_candidate(*a) < dist_to_candidate(*b))
     QSORT(uint32_t, client_ids, count, int_lt)
 #undef int_lt
+    printf("Sorted ids: ");
+    for (size_t i = 0; i < count; i++) {
+        printf("%d ", client_ids[i]);
+    }
+    printf("\n");
     // Now find the first gap. `prev_candidate_dist` is the distance between
     // `candidate_id` and the current potential gap.
+    printf("candidate_id: %d\n", candidate_id);
     uint32_t prev_candidate_dist = 0;
     for (size_t i = 0; i < count; i++) {
         uint32_t cur_id = client_ids[i];
+        printf("i: %ld cur_id: %d\n", i, cur_id);
         uint32_t cur_dist = dist_to_candidate(cur_id);
+        printf("prev_dist: %d cur_dist: %d\n", prev_candidate_dist, cur_dist);
         assert(cur_dist >= prev_candidate_dist);
         if (cur_dist > prev_candidate_dist) break;
         prev_candidate_dist = cur_dist + 1;
+        printf("no gap, setting prev_candidate_dist to %d\n", prev_candidate_dist);
     }
     assert(prev_candidate_dist < range_size);
     // Convert the distance to the element in the found gap to an id.
-    uint32_t result_id =
-        (prev_candidate_dist <= range_last - candidate_id)
-            ? candidate_id + prev_candidate_dist
-            : prev_candidate_dist - (range_last - candidate_id) + range_first;
+    uint32_t result_id;
+    if (prev_candidate_dist <= range_last - candidate_id)
+        result_id = candidate_id + prev_candidate_dist;
+    else
+        result_id =
+            prev_candidate_dist - (range_last - candidate_id + 1) + range_first;
+    printf("Found a gap, id: %d\n", result_id);
+    assert(dist_to_candidate(result_id) == prev_candidate_dist);
     // Check that we've converted it correctly and the resulting id is indeed
     // unused.
-    assert(dist_to_candidate(result_id) == prev_candidate_dist);
+    printf("range_first: %d, ramge_last: %d, result_id: %d\n", range_first, range_last, result_id);
     assert(result_id >= range_first && result_id <= range_last);
 #ifndef NDEBUG
     for (size_t i = 0; i < count; i++) {
@@ -660,10 +684,12 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
             img->internal_id = internal_id_counter++;
             img->client_id = iid;
             img->client_number = g->image_number;
-            if (!img->client_id && self->currently_loading.reference_rows) {
-                // We assume that if reference_rows are specified then we want to allocate a client
-                // id in the char_image range.
+            if (!img->client_id && g->num_lines) {
+                // We assume that if the number of rows is specified then we
+                // want to allocate a client id in the char_image range.
                 img->client_id = get_free_char_image_client_id(self);
+                if (!img->client_id)
+                    ABRT("ENOSPC", "Could not find a free client id for a char image.");
                 iid = img->client_id;
             } else if (!img->client_id && img->client_number) {
                 img->client_id = get_free_client_id(self);
@@ -827,7 +853,8 @@ Image*
 grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t id, uint32_t x, uint32_t y, uint32_t w, uint32_t h, CellPixelSize cell) {
     printf("put_char_image row %d col %d id %d x %d y %d w %d h %d\n", row, col, id, x, y, w, h);
     Image* img = img_by_client_id(self, id);
-    if (img == NULL) return NULL;
+    if (img == NULL) { printf("Could not find image\n"); return NULL; }
+    printf("image with id %d has %ld refs\n", img->client_id, img->refcnt);
     ensure_space_for(img, refs, ImageRef, img->refcnt + 1, refcap, 16, true);
     self->layers_dirty = true;
     ImageRef *ref = img->refs + img->refcnt++;
@@ -1516,7 +1543,7 @@ filter_refs(GraphicsManager *self, const void* data, bool free_images, bool (*fi
                 count += 1;
             }
         }
-        if (img->refcnt == 0 && (free_images || img->client_id == 0)) { remove_image(self, i);  printf("Image removed in filter_refs\n"); }
+        if (img->refcnt == 0 && (free_images || img->client_id == 0)) { remove_image(self, i);  printf("Image removed in filter_refs: %d\n", img->client_id); }
         if (only_first_image && matched) break;
     }
 }
@@ -1529,7 +1556,7 @@ modify_refs(GraphicsManager *self, const void* data, bool free_images, bool (*fi
         for (size_t j = img->refcnt; j-- > 0;) {
             if (filter_func(img->refs + j, img, data, cell)) remove_i_from_array(img->refs, j, img->refcnt);
         }
-        if (img->refcnt == 0 && (free_images || img->client_id == 0)) { remove_image(self, i); printf("Image removed in modify_refs\n"); }
+        if (img->refcnt == 0 && (free_images || img->client_id == 0)) { remove_image(self, i); printf("Image removed in modify_refs: %d\n", img->client_id); }
     }
 }
 
@@ -1696,6 +1723,8 @@ handle_delete_command(GraphicsManager *self, const GraphicsCommand *g, Cursor *c
 static inline bool
 char_filter_func(const ImageRef *ref, Image UNUSED *img, const void *data, CellPixelSize cell UNUSED) {
     int32_t row = *(int32_t*)data;
+    if (ref->is_char && ref->start_row == row)
+        printf("Probably removing char img at row %d with id %d and img->id %d refs %ld\n", row, ref->client_id, img->client_id, img->refcnt);
     return ref->is_char && ref->start_row == row;
 }
 
