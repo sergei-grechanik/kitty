@@ -1126,11 +1126,12 @@ compose(const ComposeData d, uint8_t *under_data, const uint8_t *over_data) {
     const bool can_copy_rows = !d.needs_blending && d.over_px_sz == d.under_px_sz;
     unsigned min_row_sz = d.over_offset_x < d.under_width ? d.under_width - d.over_offset_x : 0;
     min_row_sz = MIN(min_row_sz, d.over_width);
+#define END_ITER }
 #define ROW_ITER for (unsigned y = 0; y + d.over_offset_y < d.under_height && y < d.over_height; y++) { \
         uint8_t *under_row = under_data + (y + d.over_offset_y) * d.under_px_sz * d.under_width + d.under_px_sz * d.over_offset_x; \
         const uint8_t *over_row = over_data + y * d.over_px_sz * d.over_width;
     if (can_copy_rows) {
-        ROW_ITER memcpy(under_row, over_row, (size_t)d.over_px_sz * min_row_sz);}
+        ROW_ITER memcpy(under_row, over_row, (size_t)d.over_px_sz * min_row_sz); END_ITER
         return;
     }
 #define PIX_ITER for (unsigned x = 0; x < min_row_sz; x++) { \
@@ -1139,24 +1140,25 @@ compose(const ComposeData d, uint8_t *under_data, const uint8_t *over_data) {
 #define COPY_RGB under_px[0] = over_px[0]; under_px[1] = over_px[1]; under_px[2] = over_px[2];
     if (d.needs_blending) {
         if (d.under_px_sz == 3) {
-            ROW_ITER PIX_ITER blend_on_opaque(under_px, over_px); }}
+            ROW_ITER PIX_ITER blend_on_opaque(under_px, over_px); END_ITER END_ITER
         } else {
-            ROW_ITER PIX_ITER alpha_blend(under_px, over_px); }}
+            ROW_ITER PIX_ITER alpha_blend(under_px, over_px); END_ITER END_ITER
         }
     } else {
         if (d.under_px_sz == 4) {
             if (d.over_px_sz == 4) {
-                ROW_ITER PIX_ITER COPY_RGB under_px[3] = over_px[3]; }}
+                ROW_ITER PIX_ITER COPY_RGB under_px[3] = over_px[3]; END_ITER END_ITER
             } else {
-                ROW_ITER PIX_ITER COPY_RGB under_px[3] = 255; }}
+                ROW_ITER PIX_ITER COPY_RGB under_px[3] = 255; END_ITER END_ITER
             }
         } else {
-            ROW_ITER PIX_ITER COPY_RGB }}
+            ROW_ITER PIX_ITER COPY_RGB END_ITER END_ITER
         }
     }
 #undef COPY_RGB
 #undef PIX_ITER
 #undef ROW_ITER
+#undef END_ITER
 }
 
 static CoalescedFrameData
