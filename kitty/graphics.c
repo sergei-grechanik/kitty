@@ -855,57 +855,93 @@ grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t
     Image* img = img_by_client_id(self, id);
     if (img == NULL) { printf("Could not find image\n"); return NULL; }
     printf("image with id %d has %ld refs\n", img->client_id, img->refcnt);
-    ensure_space_for(img, refs, ImageRef, img->refcnt + 1, refcap, 16, true);
-    self->layers_dirty = true;
-    ImageRef *ref = img->refs + img->refcnt++;
-    zero_at_ptr(ref);
-    img->atime = monotonic();
+    for (unsigned i = 0; i < img->refcnt; ++i) {
+        ImageRef *ref = (img->refs + i);
+        printf("  ref#%d start_column %d start_row %d num_rows %d\n", i, ref->start_column, ref->start_row, ref->num_rows);
+    }
+
+    // Create the ref structure on stack first. We will not create a real
+    // reference if the image is compleely out of bounds.
+    ImageRef ref = {0};
+
     uint32_t img_rows = img->rows;
     uint32_t img_columns = img->columns;
-    // If the number of columns or rows for the image is not set, compute them in such a way that
-    // the image is as close as possible to its natural size.
+    // If the number of columns or rows for the image is not set, compute them
+    // in such a way that the image is as close as possible to its natural size.
     if (img_columns == 0)
         img_columns = (img->width + cell.width - 1) / cell.width;
-    if (img_rows == 0)
-        img_rows = (img->height + cell.height - 1) / cell.height;
+    if (img_rows == 0) img_rows = (img->height + cell.height - 1) / cell.height;
 
-    ref->start_row = row; ref->start_column = col;
+    ref.start_row = row;
+    ref.start_column = col;
 
-    // We use integers for coordinate computation which leads to problems with low-resolution images
-    // scaled to large boxes. They either overfit or underfit the box (currently we underfit).
-    // By increasing the scale we can fit the box better but at the cost of scaling artifacts.
+    // We use integers for coordinate computation which leads to problems with
+    // low-resolution images scaled to large boxes. They either overfit or
+    // underfit the box (currently we underfit). By increasing the scale we can
+    // fit the box better but at the cost of scaling artifacts.
     uint32_t scale = 1;
 
     // Fit the image to the box while preserving aspect ratio
-    if (img->width * img->rows * cell.height > img->height * img->columns * cell.width) {
+    if (img->width * img->rows * cell.height >
+        img->height * img->columns * cell.width) {
         printf("Fit to width and center vertically\n");
         // Fit to width and center vertically
-        if (!fit_to_width_helper(img->width*scale, img->height*scale, img_columns, img_rows, x, y, &w, &h, &ref->src_x, &ref->src_y, &ref->src_width, &ref->src_height, cell.width, cell.height, &ref->cell_y_offset, &ref->start_row))
+        if (!fit_to_width_helper(img->width * scale, img->height * scale,
+                                 img_columns, img_rows, x, y, &w, &h,
+                                 &ref.src_x, &ref.src_y, &ref.src_width,
+                                 &ref.src_height, cell.width, cell.height,
+                                 &ref.cell_y_offset, &ref.start_row))
             return NULL;
     } else {
         printf("Fit to height and center horizontally\n");
         // Fit to height and center horizontally
         // We use the same function but with width and height swapped
-        if (!fit_to_width_helper(img->height*scale, img->width*scale, img_rows, img_columns, y, x, &h, &w, &ref->src_y, &ref->src_x, &ref->src_height, &ref->src_width, cell.height, cell.width, &ref->cell_x_offset, &ref->start_column))
+        if (!fit_to_width_helper(img->height * scale, img->width * scale,
+                                 img_rows, img_columns, y, x, &h, &w,
+                                 &ref.src_y, &ref.src_x, &ref.src_height,
+                                 &ref.src_width, cell.height, cell.width,
+                                 &ref.cell_x_offset, &ref.start_column))
             return NULL;
     }
-    /* printf("src_y %d src_height_pre %d = %d*%d - %d\n", ref->src_y, ref->src_height, src_cell_height, h, height_delta); */
-    /* ref->src_width = MIN(ref->src_width, img->width - (img->width > ref->src_x ? ref->src_x : img->width)); */
-    /* ref->src_height = MIN(ref->src_height, img->height - (img->height > ref->src_y ? ref->src_y : img->height)); */
-    /* printf("src_y %d src_height %d\n", ref->src_y, ref->src_height); */
-    ref->src_height /= scale;
-    ref->src_width /= scale;
-    ref->src_x /= scale;
-    ref->src_y /= scale;
-    ref->cell_x_offset /= scale;
-    ref->cell_y_offset /= scale;
-    ref->z_index = 0;
-    ref->num_cols = w; ref->num_rows = h;
-    ref->is_char = true;
-    printf("ref: start_row %d start_column %d num_cols %d num_rows %d src_x %d src_y %d src_width %d src_height %d cell_x_offset %d cell_y_offset %d\n",
-           ref->start_row, ref->start_column, ref->num_cols, ref->num_rows, ref->src_x, ref->src_y, ref->src_width, ref->src_height, ref->cell_x_offset, ref->cell_y_offset);
-    update_src_rect(ref, img);
-    update_dest_rect(ref, w, h, cell);
+    /* printf("src_y %d src_height_pre %d = %d*%d - %d\n", ref.src_y,
+     * ref.src_height, src_cell_height, h, height_delta); */
+    /* ref.src_width = MIN(ref.src_width, img->width - (img->width > ref.src_x ?
+     * ref.src_x : img->width)); */
+    /* ref.src_height = MIN(ref.src_height, img->height - (img->height >
+     * ref.src_y ? ref.src_y : img->height)); */
+    /* printf("src_y %d src_height %d\n", ref.src_y, ref.src_height); */
+
+    // If the computed height is zero, don't create a real reference for
+    // this image.
+    if (h == 0) return NULL;
+
+    ref.src_height /= scale;
+    ref.src_width /= scale;
+    ref.src_x /= scale;
+    ref.src_y /= scale;
+    ref.cell_x_offset /= scale;
+    ref.cell_y_offset /= scale;
+    ref.z_index = 0;
+    ref.num_cols = w;
+    ref.num_rows = h;
+    ref.is_char = true;
+    printf(
+        "ref: start_row %d start_column %d num_cols %d num_rows %d src_x %d "
+        "src_y %d src_width %d src_height %d cell_x_offset %d cell_y_offset "
+        "%d\n",
+        ref.start_row, ref.start_column, ref.num_cols, ref.num_rows, ref.src_x,
+        ref.src_y, ref.src_width, ref.src_height, ref.cell_x_offset,
+        ref.cell_y_offset);
+
+    // Create a real ref.
+    ensure_space_for(img, refs, ImageRef, img->refcnt + 1, refcap, 16, true);
+    self->layers_dirty = true;
+    ImageRef *real_ref = img->refs + img->refcnt++;
+    *real_ref = ref;
+    img->atime = monotonic();
+
+    update_src_rect(real_ref, img);
+    update_dest_rect(real_ref, w, h, cell);
     return img;
 }
 
