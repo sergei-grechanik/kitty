@@ -149,6 +149,8 @@ img_by_client_number(GraphicsManager *self, uint32_t number) {
 
 static inline void
 remove_image(GraphicsManager *self, size_t idx) {
+    printf("Removing image with index %ld of %ld\n", idx, self->image_count);
+    assert(idx < self->image_count);
     free_image(self, self->images + idx);
     remove_i_from_array(self->images, idx, self->image_count);
     self->layers_dirty = true;
@@ -344,6 +346,7 @@ png_path_to_bitmap(const char* path, uint8_t** data, unsigned int* width, unsign
 
 static inline Image*
 find_or_create_image(GraphicsManager *self, uint32_t id, bool *existing) {
+    printf("Finding image with id %d\n", id);
     if (id) {
         for (size_t i = 0; i < self->image_count; i++) {
             if (self->images[i].client_id == id) {
@@ -352,9 +355,11 @@ find_or_create_image(GraphicsManager *self, uint32_t id, bool *existing) {
             }
         }
     }
+    printf("Image doesn't exist, creating a new one\n");
     *existing = false;
     ensure_space_for(self, images, Image, self->image_count + 1, images_capacity, 64, true);
     Image *ans = self->images + self->image_count++;
+    printf("Image count is %ld now\n", self->image_count);
     zero_at_ptr(ans);
     return ans;
 }
@@ -672,6 +677,19 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
         self->currently_loading.loading_for = (const ImageAndFrame){0};
         if (g->data_width > MAX_IMAGE_DIMENSION || g->data_height > MAX_IMAGE_DIMENSION) ABRT("EINVAL", "Image too large");
         remove_images(self, add_trim_predicate, 0);
+        if (!iid) {
+            if (g->num_lines) {
+                // We assume that if the number of rows is specified then we
+                // want to allocate a client id in the char_image range.
+                iid = get_free_char_image_client_id(self);
+                if (!iid)
+                    ABRT("ENOSPC", "Could not find a free client id for a char image.");
+            } else if (img->client_number) {
+                iid = get_free_client_id(self);
+            } else {
+                ABRT("EINVAL", "Neither client_id nor client number was specified.");
+            }
+        }
         img = find_or_create_image(self, iid, &existing);
         if (existing) {
             img->root_frame_data_loaded = false;
@@ -684,17 +702,6 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
             img->internal_id = internal_id_counter++;
             img->client_id = iid;
             img->client_number = g->image_number;
-            if (!img->client_id && g->num_lines) {
-                // We assume that if the number of rows is specified then we
-                // want to allocate a client id in the char_image range.
-                img->client_id = get_free_char_image_client_id(self);
-                if (!img->client_id)
-                    ABRT("ENOSPC", "Could not find a free client id for a char image.");
-                iid = img->client_id;
-            } else if (!img->client_id && img->client_number) {
-                img->client_id = get_free_client_id(self);
-                iid = img->client_id;
-            }
         }
         img->atime = monotonic(); img->used_storage = 0;
         if (!initialize_load_data(self, g, img, tt, fmt, 0)) return NULL;
