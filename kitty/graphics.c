@@ -683,8 +683,8 @@ handle_add_command(GraphicsManager *self, const GraphicsCommand *g, const uint8_
                 // want to allocate a client id in the char_image range.
                 iid = get_free_char_image_client_id(self);
                 if (!iid)
-                    ABRT("ENOSPC", "Could not find a free client id for a char image.");
-            } else if (img->client_number) {
+                    ABRT("ENOSPC", "Too many char images.");
+            } else if (g->image_number) {
                 iid = get_free_client_id(self);
             } else {
                 ABRT("EINVAL", "Neither client_id nor client number was specified.");
