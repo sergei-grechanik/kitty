@@ -36,12 +36,24 @@ stty -echo
 
 cleanup() {
     stty $stty_orig
-    rm $TMPDIR/chunk_*
+    rm $TMPDIR/chunk_* 2> /dev/null
+    rm $TMPDIR/image* 2> /dev/null
     rmdir $TMPDIR
 }
 
 # register the cleanup function to be called on the EXIT signal
 trap cleanup EXIT INT TERM
+
+du -h "$FILE"
+
+# Check if the image is a png, and if it's not, try to convert it.
+if ! (file "$FILE" | grep -q "PNG image"); then
+    if ! convert "$FILE" "$TMPDIR/image.png"; then
+        echoerr "Cannot convert image to png"
+        exit 1
+    fi
+    FILE="$TMPDIR/image.png"
+fi
 
 ID=1
 
@@ -61,9 +73,9 @@ else
     }
 fi
 
-cat "$FILE" | base64 -w0 | split -b 4096 - "$TMPDIR/chunk_"
+du -h "$FILE"
 
-ls $TMPDIR
+cat "$FILE" | base64 -w0 | split -b 4096 - "$TMPDIR/chunk_"
 
 # a=t    the action is to transmit data
 # I=$ID
@@ -77,8 +89,12 @@ start_gr_command
 echo -en "a=t,I=$ID,f=100,t=d,c=${W},r=${H},m=1"
 end_gr_command
 
+CHUNKS_COUNT="$(ls -1 $TMPDIR/chunk_* | wc -l)"
+CHUNK_I=0
+
 for CHUNK in $TMPDIR/chunk_*; do
-    echo Uploading $CHUNK
+    CHUNK_I=$((CHUNK_I+1))
+    echo -en "Uploading $CHUNK $CHUNK_I/$CHUNKS_COUNT\r"
     start_gr_command
     echo -en "I=$ID,m=1;"
     cat $CHUNK

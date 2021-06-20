@@ -834,9 +834,28 @@ fit_to_width_helper(uint32_t img_width, uint32_t img_height,
         if (*h <= empty_lines)
             return false;
         *h -= empty_lines;
+    } else if ((uint32_t)src_y_signed >= img_height) {
+        // Do not create this ref if it is completely out of bounds
+        return false;
     }
     *src_width = src_cell_width * *w;
+    if (*src_x + *src_width > img_width) {
+        // If the height is out of bounds, we remove some rows at the bottom.
+        // Note that we remove an integer number of rows, so the image may still
+        // underfit.
+        uint32_t empty_lines_at_end = (*src_x + *src_width - img_width)/src_cell_width;
+        *w -= empty_lines_at_end;
+        *src_width -= empty_lines_at_end * src_cell_width;
+    }
     *src_height = src_cell_height * *h - height_delta;
+    if (*src_y + *src_height > img_height) {
+        // If the height is out of bounds, we remove some rows at the bottom.
+        // Note that we remove an integer number of rows, so the image may still
+        // underfit.
+        uint32_t empty_lines_at_end = (*cell_y_offset + *src_y + *src_height - img_height)/src_cell_height;
+        *h -= empty_lines_at_end;
+        *src_height -= empty_lines_at_end * src_cell_height;
+    }
     return true;
 }
 
@@ -868,7 +887,7 @@ grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t
     }
 
     // Create the ref structure on stack first. We will not create a real
-    // reference if the image is compleely out of bounds.
+    // reference if the image is completely out of bounds.
     ImageRef ref = {0};
 
     uint32_t img_rows = img->rows;
@@ -888,9 +907,14 @@ grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t
     // fit the box better but at the cost of scaling artifacts.
     uint32_t scale = 1;
 
+    printf("*** Image %dx%d is being fit into box of %dx%d cells\n",
+           img->width, img->height, img_columns, img_rows);
+    printf("*** And then we render the cell rectangle starting from (%d, %d) of size %dx%d\n",
+           x, y, w, h);
+
     // Fit the image to the box while preserving aspect ratio
-    if (img->width * img->rows * cell.height >
-        img->height * img->columns * cell.width) {
+    if (img->width * img_rows * cell.height >
+        img->height * img_columns * cell.width) {
         printf("Fit to width and center vertically\n");
         // Fit to width and center vertically
         if (!fit_to_width_helper(img->width * scale, img->height * scale,
@@ -926,12 +950,14 @@ grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t
     ref.src_width /= scale;
     ref.src_x /= scale;
     ref.src_y /= scale;
-    ref.cell_x_offset /= scale;
-    ref.cell_y_offset /= scale;
     ref.z_index = 0;
     ref.num_cols = w;
     ref.num_rows = h;
     ref.is_char = true;
+    printf("*** After trimming the box starts from (%d+%dpx, %d+%dpx) and has size %dx%d\n",
+           x + (ref.start_column - col), ref.cell_x_offset, y + (ref.start_row - row), ref.cell_y_offset, w, h);
+    printf("*** And the corresponding image rectangle is (%d, %d), %dx%d\n",
+           ref.src_x, ref.src_y, ref.src_width, ref.src_height);
     printf(
         "ref: start_row %d start_column %d num_cols %d num_rows %d src_x %d "
         "src_y %d src_width %d src_height %d cell_x_offset %d cell_y_offset "
