@@ -1,20 +1,70 @@
 #!/bin/bash
 
+COLS=""
+ROWS=""
+FILE=""
+OUT="/dev/stdout"
+ERR="/dev/stderr"
+
 echoerr () {
-    echo $1 > /dev/stderr
+    echo "$1" >> "$ERR"
 }
 
-FILE="$1"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -c|--columns)
+            COLS="$2"
+            shift
+            shift
+            ;;
+        -r|--rows)
+            ROWS="$2"
+            shift
+            shift
+            ;;
+        -o|--output)
+            OUT="$2"
+            shift
+            shift
+            ;;
+        -e|--err)
+            ERR="$2"
+            shift
+            shift
+            ;;
+        -h|--help)
+            exit 0
+            ;;
+        -f|--file)
+            if [[ -n "$FILE" ]]; then
+                echoerr "Multiple image files are not supported"
+                exit 1
+            fi
+            FILE="$2"
+            shift
+            shift
+            ;;
+        -*)
+            echoerr "Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            if [[ -n "$FILE" ]]; then
+                echoerr "Multiple image files are not supported: $FILE and $1"
+                exit 1
+            fi
+            FILE="$1"
+            shift
+            ;;
+    esac
+done
 
-W="$2"
-H="$3"
-
-if [[ -z "$W" ]]; then
-    W=20
+if [[ -z "$COLS" ]]; then
+    COLS=50
 fi
 
-if [[ -z "$H" ]]; then
-    H=20
+if [[ -z "$ROWS" ]]; then
+    ROWS=15
 fi
 
 
@@ -86,7 +136,7 @@ cat "$FILE" | base64 -w0 | split -b 4096 - "$TMPDIR/chunk_"
 # o=z    use compression (not used)
 # m=1    multi-chunked data
 start_gr_command
-echo -en "a=t,I=$ID,f=100,t=d,c=${W},r=${H},m=1"
+echo -en "a=t,I=$ID,f=100,t=d,c=${COLS},r=${ROWS},m=1"
 end_gr_command
 
 CHUNKS_COUNT="$(ls -1 $TMPDIR/chunk_* | wc -l)"
@@ -100,6 +150,7 @@ for CHUNK in $TMPDIR/chunk_*; do
     cat $CHUNK
     end_gr_command
 done
+echo
 
 start_gr_command
 echo -en "I=$ID,m=0"
@@ -125,7 +176,6 @@ if ! read -r -d '\' -t 0.5 TERM_RESPONSE; then
 fi
 
 IMAGE_ID="$(sed -n "s/^.*_G.*i=\([0-9]\+\),I=${ID}.*;OK.*$/\1/p" <<< "$TERM_RESPONSE")"
-echo "id: $IMAGE_ID"
 
 if ! [[ "$IMAGE_ID" =~ ^[0-9]+$ ]]; then
     echoerr "Invalid terminal response: $(sed 's/[\x01-\x1F\x7F]/?/g' <<< "$TERM_RESPONSE")"
@@ -135,20 +185,17 @@ fi
 
 
 IMAGE_ID="$(printf "%x" "$IMAGE_ID")"
-echo "Hex id: $IMAGE_ID"
 IMAGE_SYMBOL="$(printf "\U$IMAGE_ID")"
 
-for Y in `seq 0 $(expr $H - 1)`; do
-    for X in `seq 0 $(expr $W - 1)`; do
-        echo -en "\e[48;2;${X};150;${Y}m\e[38;5;${Y}m$IMAGE_SYMBOL"
-    done
-    echo -en $Y
-    printf "\n"
-done
+# Clear the output file
+> "$OUT"
 
-# for Y in `seq 0 $H`; do
-#     for X in `seq 0 $W`; do
-#         echo -en "\e[48;2;${X}0;150;${Y}0m\e[38;2;${ID};${X};${Y}m@"
-#     done
-#     printf "\n"
-# done
+
+# Fill the output with characters representing the image
+for Y in `seq 0 $(expr $ROWS - 1)`; do
+    echo -en "\e[38;5;${Y}m" >> "$OUT"
+    for X in `seq 0 $(expr $COLS - 1)`; do
+        echo -en "$IMAGE_SYMBOL" >> "$OUT"
+    done
+    printf "\n" >> "$OUT"
+done
