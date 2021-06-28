@@ -5,6 +5,7 @@ ROWS=""
 FILE=""
 OUT="/dev/stdout"
 ERR="/dev/stderr"
+NOESC=""
 
 echoerr () {
     echo "$1" >> "$ERR"
@@ -44,6 +45,10 @@ while [[ $# -gt 0 ]]; do
             shift
             shift
             ;;
+        --noesc)
+            NOESC=1
+            shift
+            ;;
         -*)
             echoerr "Unknown option: $1"
             exit 1
@@ -76,7 +81,7 @@ if [[ ! "$TMPDIR" || ! -d "$TMPDIR" ]]; then
     exit 1
 fi
 
-echo $TMPDIR
+# echo $TMPDIR
 
 
 # We need to disable echo, otherwise the response from the terminal containing
@@ -93,8 +98,6 @@ cleanup() {
 
 # register the cleanup function to be called on the EXIT signal
 trap cleanup EXIT INT TERM
-
-du -h "$FILE"
 
 # Check if the image is a png, and if it's not, try to convert it.
 if ! (file "$FILE" | grep -q "PNG image"); then
@@ -123,7 +126,7 @@ else
     }
 fi
 
-du -h "$FILE"
+# du -h "$FILE"
 
 cat "$FILE" | base64 -w0 | split -b 4096 - "$TMPDIR/chunk_"
 
@@ -144,13 +147,13 @@ CHUNK_I=0
 
 for CHUNK in $TMPDIR/chunk_*; do
     CHUNK_I=$((CHUNK_I+1))
-    echo -en "Uploading $CHUNK $CHUNK_I/$CHUNKS_COUNT\r"
+    # echo -en "Uploading $CHUNK $CHUNK_I/$CHUNKS_COUNT\r"
     start_gr_command
     echo -en "I=$ID,m=1;"
     cat $CHUNK
     end_gr_command
 done
-echo
+# echo
 
 start_gr_command
 echo -en "I=$ID,m=0"
@@ -193,7 +196,9 @@ IMAGE_SYMBOL="$(printf "\U$IMAGE_ID")"
 
 # Fill the output with characters representing the image
 for Y in `seq 0 $(expr $ROWS - 1)`; do
-    echo -en "\e[38;5;${Y}m" >> "$OUT"
+    if [[ -z "$NOESC" ]]; then
+        echo -en "\e[38;5;${Y}m" >> "$OUT"
+    fi
     for X in `seq 0 $(expr $COLS - 1)`; do
         echo -en "$IMAGE_SYMBOL" >> "$OUT"
     done

@@ -811,8 +811,6 @@ fit_to_width_helper(uint32_t img_width, uint32_t img_height,
                     uint32_t *cell_y_offset, int32_t *start_row) {
     float src_offset = 0;
     // Dimensions of a cell in the original image's units
-    // We use ceiling division here because otherwise the image may overfit the box. The side
-    // effect is that it now may underfit the box, but it's probably better.
     float src_cell_width = (float)img_width / img_columns;
     float src_cell_height = src_cell_width * cell_height / cell_width;
     float src_x_float = (uint32_t)(x * src_cell_width);
@@ -821,7 +819,7 @@ fit_to_width_helper(uint32_t img_width, uint32_t img_height,
     float src_y_float = y * src_cell_height - (src_cell_height * img_rows - img_height) / 2;
     if (src_y_float < 0) {
         // If the source is negative we have to remove some integer number of
-        // rows and the rest will be cell_y_offset.
+        // rows and the rest will be compensated by cell_y_offset.
         uint32_t empty_lines = (uint32_t)(-src_y_float / src_cell_height);
         if (*h <= empty_lines)
             return false;
@@ -928,19 +926,13 @@ grman_put_char_image(GraphicsManager *self, uint32_t row, uint32_t col, uint32_t
                 cell.height, cell.width, &ref.cell_x_offset, &ref.start_column))
             return NULL;
     }
-    /* printf("src_y %d src_height_pre %d = %d*%d - %d\n", ref.src_y,
-     * ref.src_height, src_cell_height, h, height_delta); */
-    /* ref.src_width = MIN(ref.src_width, img->width - (img->width > ref.src_x ?
-     * ref.src_x : img->width)); */
-    /* ref.src_height = MIN(ref.src_height, img->height - (img->height >
-     * ref.src_y ? ref.src_y : img->height)); */
-    /* printf("src_y %d src_height %d\n", ref.src_y, ref.src_height); */
 
     // If the computed height is zero, don't create a real reference for
     // this image.
     if (h == 0) return NULL;
 
-    ref.z_index = 0;
+    // The cursor will be drawn on top of the image.
+    ref.z_index = -1;
     ref.num_cols = w;
     ref.num_rows = h;
     ref.is_char = true;
