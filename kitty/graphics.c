@@ -1596,7 +1596,11 @@ filter_refs(GraphicsManager *self, const void* data, bool free_images, bool (*fi
                 count += 1;
             }
         }
-        if (img->refcnt == 0 && (free_images || img->client_id == 0)) { remove_image(self, i);  printf("Image removed in filter_refs: %d\n", img->client_id); }
+        // We do not delete images from the char image interval because they are
+        // intended to be managed in a sloppier manner.
+        if (!(img->client_id >= global_state.opts.image_chars_first && img->client_id <= global_state.opts.image_chars_last)) {
+            if (img->refcnt == 0 && (free_images || img->client_id == 0)) { remove_image(self, i);  printf("Image removed in filter_refs: %d\n", img->client_id); }
+        }
         if (only_first_image && matched) break;
     }
 }
