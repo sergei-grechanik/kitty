@@ -10,9 +10,51 @@ endfor
 
 let s:path = fnamemodify(resolve(expand('<sfile>:p')), ':h')
 
+let g:terminal_image_min_columns=1
+let g:terminal_image_min_rows=1
+let g:terminal_image_max_columns=100
+let g:terminal_image_max_rows=30
+let g:terminal_image_columns_per_inch=6.0
+let g:terminal_image_rows_per_inch=3.0
+
+function! ComputeBestImageSize(filename)
+    let maxcols = min([g:terminal_image_max_columns, &columns, winwidth(0) - 6])
+    let maxrows = min([g:terminal_image_max_rows, &lines, winheight(0) - 2])
+    let maxcols = max([g:terminal_image_min_columns, maxcols])
+    let maxrows = max([g:terminal_image_min_rows, maxrows])
+    let filename_expanded = resolve(expand(a:filename))
+    let filename_str = shellescape(filename_expanded)
+    let res = system("identify -format '%w %h %x %y' " . filename_str)
+    if res == ""
+        return [maxcols, maxrows]
+    endif
+    let whxy = split(res, ' ')
+    let w = str2float(whxy[0])/str2float(whxy[2])
+    let h = str2float(whxy[1])/str2float(whxy[3])
+    let w = w * g:terminal_image_columns_per_inch
+    let h = h * g:terminal_image_rows_per_inch
+    if w > maxcols
+        let h = h * maxcols / w
+        let w = maxcols
+    endif
+    if h > maxrows
+        let w = w * maxrows / h
+        let h = maxrows
+    endif
+    return [max([g:terminal_image_min_columns, float2nr(w)]),
+           \ max([g:terminal_image_min_rows, float2nr(h)])]
+endfun
+
 function! UploadTerminalImage(filename, cols, rows)
-    let cols_str = shellescape(string(a:cols))
-    let rows_str = shellescape(string(a:rows))
+    let cols = a:cols
+    let rows = a:rows
+    if cols == 0 || rows == 0
+        let dims = ComputeBestImageSize(a:filename)
+        let cols = dims[0]
+        let rows = dims[1]
+    endif
+    let cols_str = shellescape(string(cols))
+    let rows_str = shellescape(string(rows))
     let filename_expanded = resolve(expand(a:filename))
     let filename_str = shellescape(filename_expanded)
     let tmpfile = tempname()
@@ -26,7 +68,9 @@ function! UploadTerminalImage(filename, cols, rows)
                 \ " < /dev/tty > /dev/tty")
     if v:shell_error != 0
         if filereadable(tmpfile)
-            throw "Uploading error: " . readfile(tmpfile)[0]
+            let err_message = readfile(tmpfile)[0]
+            call delete(tmpfile)
+            throw "Uploading error: " . err_message
         endif
         throw "Unknown uploading error"
     endif
@@ -59,7 +103,7 @@ function! ShowImageUnderCursor() abort
             redraw
             echo "Uploading " . filename
             try
-                let text = UploadTerminalImage(filename, 40, 10)
+                let text = UploadTerminalImage(filename, 0, 0)
                 redraw
                 echo "Showing " . filename
             catch

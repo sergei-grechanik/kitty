@@ -184,7 +184,7 @@ for CHUNK in $TMPDIR/chunk_*; do
                 SPEED="$(((CHUNK_I*4 - 4)/TIMEDIFF)) K/s"
             fi
         fi
-        echostatus "Uploading $FILE chunk $((CHUNK_I*4))/$((CHUNKS_COUNT*4))K   $SPEED"
+        echostatus "$((CHUNK_I*4))/$((CHUNKS_COUNT*4))K [$SPEED]"
     fi
     start_gr_command
     echo -en "I=$ID,m=1;"
