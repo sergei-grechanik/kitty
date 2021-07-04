@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Exit the script on keyboard interrupt
+trap "exit 1" INT
+
 COLS=""
 ROWS=""
 FILE=""
@@ -7,7 +10,14 @@ OUT="/dev/stdout"
 ERR="/dev/stderr"
 NOESC=""
 
-echoerr () {
+echostatus() {
+    # clear the current line
+    echo -en "\033[2K\r"
+    echo -n "$1"
+}
+
+echoerr() {
+    echostatus "$1"
     echo "$1" >> "$ERR"
 }
 
@@ -88,8 +98,17 @@ fi
 # the image id will get echoed.
 stty_orig=`stty -g`
 stty -echo
+# Disable ctrl-z
+stty susp undef
+
+consume_errors() {
+    while read -r -d '\' -t 0.1 TERM_RESPONSE; do
+        true
+    done
+}
 
 cleanup() {
+    consume_errors
     stty $stty_orig
     rm $TMPDIR/chunk_* 2> /dev/null
     rm $TMPDIR/image* 2> /dev/null
@@ -97,10 +116,17 @@ cleanup() {
 }
 
 # register the cleanup function to be called on the EXIT signal
-trap cleanup EXIT INT TERM
+trap cleanup EXIT TERM
+
+# Check if the file exists
+if ! [[ -f "$FILE" ]]; then
+    echoerr "File not found: $FILE (pwd: $(pwd))"
+    exit 1
+fi
 
 # Check if the image is a png, and if it's not, try to convert it.
 if ! (file "$FILE" | grep -q "PNG image"); then
+    echostatus "Converting $FILE to png"
     if ! convert "$FILE" "$TMPDIR/image.png"; then
         echoerr "Cannot convert image to png"
         exit 1
@@ -108,7 +134,7 @@ if ! (file "$FILE" | grep -q "PNG image"); then
     FILE="$TMPDIR/image.png"
 fi
 
-ID=1
+ID=$RANDOM
 
 if [[ -n "$TMUX" ]] && [[ "$TERM" =~ "screen" ]]; then
     start_gr_command() {
@@ -144,37 +170,42 @@ end_gr_command
 
 CHUNKS_COUNT="$(ls -1 $TMPDIR/chunk_* | wc -l)"
 CHUNK_I=0
+STARTTIME="$(date +%s)"
+SPEED=""
 
 for CHUNK in $TMPDIR/chunk_*; do
     CHUNK_I=$((CHUNK_I+1))
-    # echo -en "Uploading $CHUNK $CHUNK_I/$CHUNKS_COUNT\r"
+    if [[ $((CHUNK_I % 10)) -eq 1 ]]; then
+        # Do not compute the speed too often
+        if [[ $((CHUNK_I % 100)) -eq 1 ]]; then
+            CURTIME="$(date +%s)"
+            TIMEDIFF="$((CURTIME - STARTTIME))"
+            if [[ "$TIMEDIFF" -ne 0 ]]; then
+                SPEED="$(((CHUNK_I*4 - 4)/TIMEDIFF)) K/s"
+            fi
+        fi
+        echostatus "Uploading $FILE chunk $((CHUNK_I*4))/$((CHUNKS_COUNT*4))K   $SPEED"
+    fi
     start_gr_command
     echo -en "I=$ID,m=1;"
     cat $CHUNK
     end_gr_command
 done
-# echo
 
 start_gr_command
 echo -en "I=$ID,m=0"
 end_gr_command
 
-consume_errors() {
-    while read -r -d '\' -t 0.1 TERM_RESPONSE; do
-        true
-    done
-}
-
+echostatus "Awaiting terminal response"
 # -r means backslash is part of the line
 # -d '\' means \ is the line delimiter
 # -t 0.5 is timeout
-if ! read -r -d '\' -t 0.5 TERM_RESPONSE; then
+if ! read -r -d '\' -t 2 TERM_RESPONSE; then
     if [[ -z "$TERM_RESPONSE" ]]; then
         echoerr "No response from terminal"
     else
         echoerr "Invalid terminal response: $(sed 's/[\x01-\x1F\x7F]/?/g' <<< "$TERM_RESPONSE")"
     fi
-    consume_errors
     exit 1
 fi
 
@@ -182,13 +213,15 @@ IMAGE_ID="$(sed -n "s/^.*_G.*i=\([0-9]\+\),I=${ID}.*;OK.*$/\1/p" <<< "$TERM_RESP
 
 if ! [[ "$IMAGE_ID" =~ ^[0-9]+$ ]]; then
     echoerr "Invalid terminal response: $(sed 's/[\x01-\x1F\x7F]/?/g' <<< "$TERM_RESPONSE")"
-    consume_errors
     exit 1
 fi
 
 
 IMAGE_ID="$(printf "%x" "$IMAGE_ID")"
 IMAGE_SYMBOL="$(printf "\U$IMAGE_ID")"
+
+echostatus "Successfully received imaged id: $IMAGE_ID"
+echostatus
 
 # Clear the output file
 > "$OUT"

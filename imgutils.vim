@@ -10,7 +10,7 @@ endfor
 
 let s:path = fnamemodify(resolve(expand('<sfile>:p')), ':h')
 
-function! UploadTerminalImage(filename, cols, rows) abort
+function! UploadTerminalImage(filename, cols, rows)
     let cols_str = shellescape(string(a:cols))
     let rows_str = shellescape(string(a:rows))
     let filename_expanded = resolve(expand(a:filename))
@@ -24,6 +24,12 @@ function! UploadTerminalImage(filename, cols, rows) abort
                 \ " --noesc " .
                 \ " " . filename_str .
                 \ " < /dev/tty > /dev/tty")
+    if v:shell_error != 0
+        if filereadable(tmpfile)
+            throw "Uploading error: " . readfile(tmpfile)[0]
+        endif
+        throw "Unknown uploading error"
+    endif
     let lines = readfile(tmpfile)
     let result = []
     let i = 0
@@ -35,4 +41,41 @@ function! UploadTerminalImage(filename, cols, rows) abort
     endfor
     call delete(tmpfile)
     return result
+endfun
+
+function! ShowImageUnderCursor() abort
+    let cfile = expand('<cfile>')
+    let filenames = [cfile, expand('%:p:h') . "/" . cfile]
+    if exists('b:netrw_curdir')
+        call add(filenames, b:netrw_curdir . "/" . cfile)
+    endif
+    let globlist = glob(expand('%:p:h') . "/**/" . cfile, 0, 1)
+    if len(globlist) == 1
+        call extend(filenames, globlist)
+    endif
+    for filename in filenames
+        if filereadable(filename)
+            let uploading_message = popup_atcursor("Uploading " . filename, {})
+            redraw
+            echo "Uploading " . filename
+            try
+                let text = UploadTerminalImage(filename, 40, 10)
+                redraw
+                echo "Showing " . filename
+            catch
+                call popup_clear(uploading_message)
+                " Vim doesn't want to redraw unless I put echo in between
+                redraw!
+                echo
+                redraw!
+                echohl ErrorMsg
+                echo v:exception
+                echohl None
+                return
+            endtry
+            call popup_clear(uploading_message)
+            return popup_atcursor(text, {})
+        endif
+    endfor
+    echom "Image not readable: " . string(filenames)
 endfun
