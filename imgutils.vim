@@ -87,39 +87,79 @@ function! UploadTerminalImage(filename, cols, rows)
     return result
 endfun
 
-function! ShowImageUnderCursor() abort
-    let cfile = expand('<cfile>')
-    let filenames = [cfile, expand('%:p:h') . "/" . cfile]
+function! FindReadableFile(filename) abort
+    let filenames = [a:filename, expand('%:p:h') . "/" . a:filename]
     if exists('b:netrw_curdir')
-        call add(filenames, b:netrw_curdir . "/" . cfile)
+        call add(filenames, b:netrw_curdir . "/" . a:filename)
     endif
-    let globlist = glob(expand('%:p:h') . "/**/" . cfile, 0, 1)
+    let globlist = glob(expand('%:p:h') . "/**/" . a:filename, 0, 1)
     if len(globlist) == 1
         call extend(filenames, globlist)
     endif
     for filename in filenames
         if filereadable(filename)
-            let uploading_message = popup_atcursor("Uploading " . filename, {})
-            redraw
-            echo "Uploading " . filename
-            try
-                let text = UploadTerminalImage(filename, 0, 0)
-                redraw
-                echo "Showing " . filename
-            catch
-                call popup_clear(uploading_message)
-                " Vim doesn't want to redraw unless I put echo in between
-                redraw!
-                echo
-                redraw!
-                echohl ErrorMsg
-                echo v:exception
-                echohl None
-                return
-            endtry
-            call popup_clear(uploading_message)
-            return popup_atcursor(text, {})
+            return filename
         endif
     endfor
-    echom "Image not readable: " . string(filenames)
+    echohl ErrorMsg
+    echo "File(s) not readable: " . string(filenames)
+    echohl None
+endfun
+
+function! ShowImageUnderCursor() abort
+    let filename = FindReadableFile(expand('<cfile>'))
+    if !filereadable(filename)
+        return
+    endif
+    let uploading_message = popup_atcursor("Uploading " . filename, {})
+    redraw
+    echo "Uploading " . filename
+    try
+        let text = UploadTerminalImage(filename, 0, 0)
+        redraw
+        echo "Showing " . filename
+    catch
+        call popup_close(uploading_message)
+        " Vim doesn't want to redraw unless I put echo in between
+        redraw!
+        echo
+        redraw!
+        echohl ErrorMsg
+        echo v:exception
+        echohl None
+        return
+    endtry
+    call popup_close(uploading_message)
+    return popup_atcursor(text, #{wrap: 0})
+endfun
+
+function! ShowImageSomewhere() abort
+    let filename = FindReadableFile(expand('<cfile>'))
+    if !filereadable(filename)
+        return
+    endif
+    let uploading_message = popup_atcursor("Uploading " . filename, {})
+    redraw
+    echo "Uploading " . filename
+    try
+        let text = UploadTerminalImage(filename, 0, 0)
+        redraw
+        echo "Showing " . filename
+    catch
+        call popup_close(uploading_message)
+        " Vim doesn't want to redraw unless I put echo in between
+        redraw!
+        echo
+        redraw!
+        echohl ErrorMsg
+        echo v:exception
+        echohl None
+        return
+    endtry
+    let g:terminal_image_propid += 1
+    let propid = g:terminal_image_propid
+    call popup_close(uploading_message)
+    call prop_type_add('TerminalImageMarker' . string(propid), {})
+    call prop_add(line('.'), col('.'), #{length: 1, type: 'TerminalImageMarker' . string(propid), id: propid})
+    return popup_create(text, #{line: 0, col: 10, pos: 'topleft', textprop: 'TerminalImageMarker' . string(propid), textpropid: propid, close: 'click', wrap: 0})
 endfun
