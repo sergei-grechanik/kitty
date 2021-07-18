@@ -124,18 +124,11 @@ if ! [[ -f "$FILE" ]]; then
     exit 1
 fi
 
-# Check if the image is a png, and if it's not, try to convert it.
-if ! (file "$FILE" | grep -q "PNG image"); then
-    echostatus "Converting $FILE to png"
-    if ! convert "$FILE" "$TMPDIR/image.png"; then
-        echoerr "Cannot convert image to png"
-        exit 1
-    fi
-    FILE="$TMPDIR/image.png"
-fi
+#####################################################################
+# Helper functions
+#####################################################################
 
-ID=$RANDOM
-
+# Functions to emit the start and the end of a graphics command
 if [[ -n "$TMUX" ]] && [[ "$TERM" =~ "screen" ]]; then
     start_gr_command() {
         echo -en '\ePtmux;\e\e_G'
@@ -152,7 +145,101 @@ else
     }
 fi
 
-# du -h "$FILE"
+# Get a response from the terminal and store it in TERM_RESPONSE
+# aborts the script if there is no response
+get_terminal_response() {
+    TERM_RESPONSE=""
+    # -r means backslash is part of the line
+    # -d '\' means \ is the line delimiter
+    # -t 0.5 is timeout
+    if ! read -r -d '\' -t 2 TERM_RESPONSE; then
+        if [[ -z "$TERM_RESPONSE" ]]; then
+            echoerr "No response from terminal"
+        else
+            echoerr "Invalid terminal response: $(sed 's/[\x01-\x1F\x7F]/?/g' <<< "$TERM_RESPONSE")"
+        fi
+        exit 1
+    fi
+}
+
+
+# Output characters representing the image
+output_image() {
+    local IMAGE_ID="$(printf "%x" "$1")"
+    local IMAGE_SYMBOL="$(printf "\U$IMAGE_ID")"
+
+    echostatus "Successfully received imaged id: $IMAGE_ID"
+    echostatus
+
+    # Clear the output file
+    > "$OUT"
+
+    # Fill the output with characters representing the image
+    for Y in `seq 0 $(expr $ROWS - 1)`; do
+        if [[ -z "$NOESC" ]]; then
+            echo -en "\e[38;5;${Y}m" >> "$OUT"
+        fi
+        for X in `seq 0 $(expr $COLS - 1)`; do
+            echo -en "$IMAGE_SYMBOL" >> "$OUT"
+        done
+        printf "\n" >> "$OUT"
+    done
+
+    return 0
+}
+
+#####################################################################
+# Try to query the image client id by md5sum
+#####################################################################
+
+echostatus "Trying to find image by md5sum"
+
+# Compute image IMGUID
+IMGUID="$(md5sum "$FILE" | cut -f 1 -d " ")x${ROWS}x${COLS}"
+# Pad it with '='' so it looks like a base64 encoding of something
+UID_LEN="${#IMGUID}"
+PAD_LEN="$((4 - ($UID_LEN % 4)))"
+for i in $(seq $PAD_LEN); do
+    IMGUID="${IMGUID}="
+done
+
+# a=U    the action is to query the image by IMGUID
+# I=$ID  just some number, should be the same in the response
+# U=...  unique identifier
+start_gr_command
+echo -en "a=U,q=1;${IMGUID}"
+end_gr_command
+
+get_terminal_response
+
+IMAGE_ID="$(sed -n "s/^.*_G.*i=\([0-9]\+\).*;OK.*$/\1/p" <<< "$TERM_RESPONSE")"
+
+if ! [[ "$IMAGE_ID" =~ ^[0-9]+$ ]]; then
+    NOT_FOUND="$(sed -n "s/^.*_G.*;.*NOT.*FOUND.*$/NOTFOUND/p" <<< "$TERM_RESPONSE")"
+    if [[ -z "$NOT_FOUND" ]]; then
+        echoerr "Invalid terminal response: $(sed 's/[\x01-\x1F\x7F]/?/g' <<< "$TERM_RESPONSE")"
+        exit 1
+    fi
+else
+    output_image "$IMAGE_ID"
+    exit 0
+fi
+
+#####################################################################
+# Chunk and upload the image
+#####################################################################
+
+# Check if the image is a png, and if it's not, try to convert it.
+if ! (file "$FILE" | grep -q "PNG image"); then
+    echostatus "Converting $FILE to png"
+    if ! convert "$FILE" "$TMPDIR/image.png"; then
+        echoerr "Cannot convert image to png"
+        exit 1
+    fi
+    FILE="$TMPDIR/image.png"
+fi
+
+ID=$RANDOM
 
 cat "$FILE" | base64 -w0 | split -b 4096 - "$TMPDIR/chunk_"
 
@@ -197,43 +284,19 @@ echo -en "I=$ID,m=0"
 end_gr_command
 
 echostatus "Awaiting terminal response"
-# -r means backslash is part of the line
-# -d '\' means \ is the line delimiter
-# -t 0.5 is timeout
-if ! read -r -d '\' -t 2 TERM_RESPONSE; then
-    if [[ -z "$TERM_RESPONSE" ]]; then
-        echoerr "No response from terminal"
-    else
-        echoerr "Invalid terminal response: $(sed 's/[\x01-\x1F\x7F]/?/g' <<< "$TERM_RESPONSE")"
-    fi
-    exit 1
-fi
+get_terminal_response
 
 IMAGE_ID="$(sed -n "s/^.*_G.*i=\([0-9]\+\),I=${ID}.*;OK.*$/\1/p" <<< "$TERM_RESPONSE")"
 
 if ! [[ "$IMAGE_ID" =~ ^[0-9]+$ ]]; then
     echoerr "Invalid terminal response: $(sed 's/[\x01-\x1F\x7F]/?/g' <<< "$TERM_RESPONSE")"
     exit 1
+else
+    # Set UID for the uploaded image.
+    start_gr_command
+    echo -en "a=U,i=$IMAGE_ID,q=1;${IMGUID}"
+    end_gr_command
+
+    output_image "$IMAGE_ID"
+    exit 0
 fi
-
-
-IMAGE_ID="$(printf "%x" "$IMAGE_ID")"
-IMAGE_SYMBOL="$(printf "\U$IMAGE_ID")"
-
-echostatus "Successfully received imaged id: $IMAGE_ID"
-echostatus
-
-# Clear the output file
-> "$OUT"
-
-
-# Fill the output with characters representing the image
-for Y in `seq 0 $(expr $ROWS - 1)`; do
-    if [[ -z "$NOESC" ]]; then
-        echo -en "\e[38;5;${Y}m" >> "$OUT"
-    fi
-    for X in `seq 0 $(expr $COLS - 1)`; do
-        echo -en "$IMAGE_SYMBOL" >> "$OUT"
-    done
-    printf "\n" >> "$OUT"
-done

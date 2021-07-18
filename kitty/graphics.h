@@ -43,6 +43,8 @@ typedef struct {
 
     // default number of columns and rows
     uint32_t columns, rows;
+    // UID
+    uint8_t uid[64];
 
     bool root_frame_data_loaded;
     ImageRef *refs;

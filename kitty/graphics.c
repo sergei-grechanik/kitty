@@ -1881,6 +1881,39 @@ grman_handle_command(GraphicsManager *self, const GraphicsCommand *g, const uint
         case 'd':
             handle_delete_command(self, g, c, is_dirty, cell);
             break;
+        case 'U': {
+            if (g->payload_sz > 64) {
+                REPORT_ERROR("A UID can't be more than 64 bytes");
+                break;
+            }
+            uint8_t uid[64] = {0};
+            memcpy(uid, payload, g->payload_sz);
+            if (!g->id && !g->image_number) {
+                // Find an image with the given UID
+                static char response[64];
+                for (size_t i = 0; i < self->image_count; i++) {
+                    Image *img = self->images + i;
+                    if (img->client_id && memcmp(img->uid, uid, 64) == 0) {
+                        snprintf(response, 64, "Gi=%u;OK", img->client_id);
+                        return response;
+                    }
+                }
+                snprintf(response, 64, "G;NOTFOUND");
+                ret = response;
+            } else {
+                // Set image UID
+                Image *img = NULL;
+                if (g->id) img = img_by_client_id(self, g->id);
+                else if (g->image_number) img = img_by_client_number(self, g->image_number);
+                if (img) {
+                    memcpy(img->uid, uid, 64);
+                } else {
+                    set_command_failed_response("ENOENT", "Set UID command refers to non-existent image with id: %u and number: %u out of %u images", g->id, g->image_number, self->image_count);
+                }
+                ret = finish_command_response(g, true);
+            }
+            break;
+        }
         default:
             REPORT_ERROR("Unknown graphics command action: %c", g->action);
             break;
